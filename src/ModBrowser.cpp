@@ -113,6 +113,15 @@ struct FavIcon : MBIconWidget {
 	void onAction(EventAction &e) override;
 };
 
+struct FavPluginIcon : MBIconWidget {
+	int selected = 0;
+	FavPluginIcon() {
+		box.size.x = 30;
+		box.size.y = 30;
+	}
+	void onAction(EventAction &e) override;
+};
+
 struct LoadIcon : MBIconWidget {
 	int selected = 0;
 	LoadIcon() {
@@ -189,6 +198,7 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 	PluginIcon *pluginIcon;
 	TagIcon *tagIcon;
 	FavIcon *favIcon;
+	FavPluginIcon *favPluginIcon;
 	LoadIcon *loadIcon;
 	MinimizeIcon *minimizeIcon;
 	float width;
@@ -221,12 +231,17 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		favIcon->setSVG(SVG::load(assetPlugin(plugin, "res/favorite.svg")));
 		backPanel->addChild(favIcon);
 	
-		loadIcon = Widget::create<LoadIcon>(Vec(98, 2));
+		favPluginIcon = Widget::create<FavPluginIcon>(Vec(98, 2));
+		favPluginIcon->mbw = this;
+		favPluginIcon->setSVG(SVG::load(assetPlugin(plugin, "res/plugin.svg")));
+		backPanel->addChild(favPluginIcon);
+	
+		loadIcon = Widget::create<LoadIcon>(Vec(130, 2));
 		loadIcon->mbw = this;
 		loadIcon->setSVG(SVG::load(assetPlugin(plugin, "res/load.svg")));
 		backPanel->addChild(loadIcon);
 	
-		minimizeIcon = Widget::create<MinimizeIcon>(Vec(130, 2));
+		minimizeIcon = Widget::create<MinimizeIcon>(Vec(162, 2));
 		minimizeIcon->mbw = this;
 		minimizeIcon->setSVG(SVG::load(assetPlugin(plugin, "res/min.svg")));
 		backPanel->addChild(minimizeIcon);	
@@ -277,6 +292,7 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		pluginIcon->selected = 0;
 		tagIcon->selected = 0;
 		favIcon->selected = 0;
+		favPluginIcon->selected = 0;
 	}
 
 	void onResize() override {
@@ -322,8 +338,9 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		}
 		SetListWidth();
 	}
-	void AddFavorites() {
+	void AddFavorites(bool addPlugin) {
 		scrollContainer->clearChildren();
+		std::list<std::shared_ptr<PluginElement>> pluginsAdded;
 		unsigned int y = 0;
 		FILE *file = fopen(assetLocal("settings.json").c_str(), "r");
 		if (!file)
@@ -353,7 +370,37 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 						continue;
 					for (std::shared_ptr<ModelElement> me : modelList) {
 						if (me->model == model) {
-							AddElement(me, y);
+							if (addPlugin) {
+								// Add the plugins that contain favorite models
+
+								// Find the PluginElement that matches for this ModelElement
+								std::shared_ptr<PluginElement> peMatch;
+								for (std::shared_ptr<PluginElement> pe : pluginList) {
+									if (!pe->label.compare(me->model->author)) {
+										peMatch = pe;
+										break;
+									}
+								}
+
+								if (peMatch != nullptr)
+								{
+									int found = false; // Avoid duplicates
+									for (auto& pe : pluginsAdded) {
+										if (pe == peMatch) {
+											found = true;
+											break;
+										}
+									}
+									if (!found) {
+										AddElement(peMatch, y);
+										pluginsAdded.push_back(peMatch);
+									}
+								}
+							}
+							else {
+								// Add the favorite models
+								AddElement(me, y);
+							}
 							y += 15;
 						}
 					}
@@ -597,8 +644,30 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 // Icon onAction
 
 void PluginIcon::onAction(EventAction &e) {
+	int wasSelected = mbw->pluginIcon->selected;
+
 	mbw->ResetIcons();
 	mbw->pluginIcon->selected = 1;
+	if (wasSelected == 1) {
+		// If you click the plugin list icon a 2nd time, then it'll sort by number of modules
+		mbw->pluginList.sort([](std::shared_ptr<PluginElement> pe1, std::shared_ptr<PluginElement> pe2) { 
+			unsigned int count1 = 0;
+			for (std::shared_ptr<ModelElement> me : pe2->mbw->modelList) {
+				if (!pe1->label.compare(me->model->author))
+					count1++;
+			}
+
+			unsigned int count2 = 0;
+			for (std::shared_ptr<ModelElement> me : pe2->mbw->modelList) {
+				if (!pe2->label.compare(me->model->author))
+					count2++;
+			}
+
+			return count1 > count2; } );
+	}
+	else {
+		mbw->pluginList.sort([](std::shared_ptr<PluginElement> pe1, std::shared_ptr<PluginElement> pe2) { return stringLowercase(pe1->label).compare(stringLowercase(pe2->label)) < 0; } );
+	}
 	mbw->AddPlugins();
 }
 
@@ -609,9 +678,15 @@ void TagIcon::onAction(EventAction &e) {
 }
 
 void FavIcon::onAction(EventAction &e) {
-	mbw->pluginIcon->selected = 0;
+	mbw->ResetIcons();
 	mbw->favIcon->selected = 1;
-	mbw->AddFavorites();
+	mbw->AddFavorites(false);
+}
+
+void FavPluginIcon::onAction(EventAction &e) {
+	mbw->ResetIcons();
+	mbw->favPluginIcon->selected = 1;
+	mbw->AddFavorites(true);
 }
 
 void LoadIcon::onAction(EventAction &e) {
@@ -663,7 +738,12 @@ void ModelElement::onAction(EventAction &e) {
 }
 
 void PluginBackElement::onAction(EventAction &e) {
-	mbw->AddPlugins();
+	if (mbw->pluginIcon->selected) {
+		mbw->AddPlugins();
+	}
+	else {
+		mbw->AddFavorites(true);
+	}
 }
 
 void TagBackElement::onAction(EventAction &e) {
