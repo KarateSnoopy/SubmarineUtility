@@ -122,6 +122,15 @@ struct FavPluginIcon : MBIconWidget {
 	void onAction(EventAction &e) override;
 };
 
+struct AddAllIcon : MBIconWidget {
+	int selected = 0;
+	AddAllIcon() {
+		box.size.x = 30;
+		box.size.y = 30;
+	}
+	void onAction(EventAction &e) override;
+};
+
 struct LoadIcon : MBIconWidget {
 	int selected = 0;
 	LoadIcon() {
@@ -143,9 +152,8 @@ struct MinimizeIcon : MBIconWidget {
 
 struct ModelElement : ListElement {
 	Model *model;
-	std::string GetLabelOne() override {
-		return model->name;
-	}
+	ModelElement* me;
+	std::string GetLabelOne() override;
 	std::string GetLabelTwo() override {
 		return model->plugin->slug;
 	}
@@ -154,6 +162,7 @@ struct ModelElement : ListElement {
 
 struct PluginElement : ListElement {
 	std::string label;
+	bool isFirst;
 	std::string GetLabelOne() override {
 		return label;
 	}
@@ -199,6 +208,7 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 	TagIcon *tagIcon;
 	FavIcon *favIcon;
 	FavPluginIcon *favPluginIcon;
+	AddAllIcon *addAllIcon;
 	LoadIcon *loadIcon;
 	MinimizeIcon *minimizeIcon;
 	float width;
@@ -206,6 +216,9 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 	std::list<std::shared_ptr<PluginElement>> pluginList;
 	std::list<std::shared_ptr<TagElement>> tagList;
 	std::list<std::shared_ptr<ModelElement>> modelList;
+	std::list<std::shared_ptr<ModelElement>> modelAddedList;
+	std::list<TextButton *> scollTextButtons;
+	ModelElement* lastModelElementAdded = nullptr;
 	std::string allfilters;
 	std::string lastPath;
 	ModBrowserWidget(Module *module) : SubControls::SizeableModuleWidget(module) {
@@ -236,12 +249,17 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		favPluginIcon->setSVG(SVG::load(assetPlugin(plugin, "res/plugin.svg")));
 		backPanel->addChild(favPluginIcon);
 	
-		loadIcon = Widget::create<LoadIcon>(Vec(130, 2));
+		addAllIcon = Widget::create<AddAllIcon>(Vec(130, 2));
+		addAllIcon->mbw = this;
+		addAllIcon->setSVG(SVG::load(assetPlugin(plugin, "res/min.svg")));
+		backPanel->addChild(addAllIcon);
+	
+		loadIcon = Widget::create<LoadIcon>(Vec(162, 2));
 		loadIcon->mbw = this;
 		loadIcon->setSVG(SVG::load(assetPlugin(plugin, "res/load.svg")));
 		backPanel->addChild(loadIcon);
 	
-		minimizeIcon = Widget::create<MinimizeIcon>(Vec(162, 2));
+		minimizeIcon = Widget::create<MinimizeIcon>(Vec(162+32, 2));
 		minimizeIcon->mbw = this;
 		minimizeIcon->setSVG(SVG::load(assetPlugin(plugin, "res/min.svg")));
 		backPanel->addChild(minimizeIcon);	
@@ -262,11 +280,13 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		// Sort Tags (probably already sorted)
 		tagList.sort([](std::shared_ptr<TagElement> te1, std::shared_ptr<TagElement> te2) { return gTagNames[te1->tag].compare(gTagNames[te2->tag]) < 0;  } );
 
+		bool isFirst = true;
 		for (Plugin *plugin : gPlugins) {
 			for (Model *model : plugin->models) {
 				std::shared_ptr<ModelElement> me = std::make_shared<ModelElement>();
 				me->mbw = this;
 				me->model = model;
+				me->me = me.get();
 				modelList.push_back(me);
 				int found = false;
 				for (std::shared_ptr<PluginElement> pe : pluginList) {
@@ -278,6 +298,8 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 				if (!found) {
 					std::shared_ptr<PluginElement> pe = std::make_shared<PluginElement>();
 					pe->mbw = this;
+					pe->isFirst = isFirst;
+					isFirst = false;
 					pe->label.assign(me->model->author);
 					pluginList.push_back(pe);
 				}
@@ -319,9 +341,11 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		tb->box.size.x = width;
 		tb->box.size.y = 15;
 		scrollContainer->addChild(tb);
+		scollTextButtons.push_back(tb);
 	}
 	void AddPlugins() {
 		scrollContainer->clearChildren();
+		scollTextButtons.clear();
 		unsigned int y = 0;
 		for (std::shared_ptr<PluginElement> pe : pluginList) {
 			AddElement(pe, y);			
@@ -331,6 +355,7 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 	}
 	void AddTags() {
 		scrollContainer->clearChildren();
+		scollTextButtons.clear();
 		unsigned int y = 0;
 		for (std::shared_ptr<TagElement> te : tagList) {
 			AddElement(te, y);
@@ -338,8 +363,67 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 		}
 		SetListWidth();
 	}
+
+	void AddAllModules() {
+		bool isFirst = true;
+		Vec lastPos;
+		for (std::shared_ptr<ModelElement> me : modelAddedList) {
+			ModuleWidget *moduleWidget = me->model->createModuleWidget();
+			if (!moduleWidget)
+				continue;
+			gRackWidget->addModule(moduleWidget);
+			if( isFirst )
+			{
+				moduleWidget->box.pos = gRackWidget->lastMousePos.minus(moduleWidget->box.size.div(2));
+				isFirst = false;
+			}
+			else
+			{
+				moduleWidget->box.pos = lastPos;
+			}
+			gRackWidget->requestModuleBoxNearest(moduleWidget, moduleWidget->box);
+			lastPos = moduleWidget->box.pos;
+			lastPos.y += 500;
+		}
+	}
+
+	void RefreshTextOnControls()
+	{
+		for (auto& tb : scollTextButtons) {
+			tb->GetLabels();
+		}
+	}
+
+	void AddNextModule() {
+		bool found = false;
+		for (std::shared_ptr<ModelElement> me : modelAddedList) {
+			if (lastModelElementAdded != nullptr)
+			{
+				if (!found)
+				{
+					if( lastModelElementAdded == me.get())
+					{
+						found = true;				 
+					}
+
+					continue;
+				}
+			}
+
+			ModuleWidget *moduleWidget = me->model->createModuleWidget();
+			if (!moduleWidget)
+				continue;
+			gRackWidget->addModule(moduleWidget);
+			gRackWidget->requestModuleBoxNearest(moduleWidget, moduleWidget->box);
+			lastModelElementAdded = me.get();
+			RefreshTextOnControls();
+			return;
+		}
+	}
+
 	void AddFavorites(bool addPlugin) {
 		scrollContainer->clearChildren();
+		scollTextButtons.clear();
 		std::list<std::shared_ptr<PluginElement>> pluginsAdded;
 		unsigned int y = 0;
 		FILE *file = fopen(assetLocal("settings.json").c_str(), "r");
@@ -353,6 +437,8 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 			return;
 		}
 		json_t *modb = json_object_get(rootJ, "moduleBrowser");
+		modelAddedList.clear();
+		lastModelElementAdded = nullptr;
 		if (modb) {
 			json_t *favoritesJ = json_object_get(modb, "favorites");
 			if (favoritesJ) {
@@ -399,6 +485,7 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 							}
 							else {
 								// Add the favorite models
+								modelAddedList.push_back(me);
 								AddElement(me, y);
 							}
 							y += 15;
@@ -413,14 +500,18 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 	}
 	void AddModels(std::string author) {
 		scrollContainer->clearChildren();
+		scollTextButtons.clear();
 		std::shared_ptr<PluginBackElement> pbe = std::make_shared<PluginBackElement>();	
 		pbe->mbw = this;
 		pbe->label2 = author;
 		AddElement(pbe, 0);
 		unsigned int y = 15;
+		modelAddedList.clear();
+		lastModelElementAdded = nullptr;
 		for (std::shared_ptr<ModelElement> me : modelList) {
 			if (!me->model->author.compare(author)) {
 				AddElement(me, y);
+				modelAddedList.push_back(me);
 				y += 15;
 			}
 		}
@@ -428,15 +519,19 @@ struct ModBrowserWidget : SubControls::SizeableModuleWidget {
 	}
 	void AddModels(unsigned int tag) {
 		scrollContainer->clearChildren();
+		scollTextButtons.clear();
 		std::shared_ptr<TagBackElement> tbe = std::make_shared<TagBackElement>();
 		tbe->mbw = this;
 		tbe->label2 = gTagNames[tag];
 		AddElement(tbe, 0);
 		unsigned int y = 15;
+		modelAddedList.clear();
+		lastModelElementAdded = nullptr;
 		for (std::shared_ptr<ModelElement> me : modelList) {
 			for (ModelTag mt : me->model->tags) {
 				if (mt == tag) {
 					AddElement(me, y);
+					modelAddedList.push_back(me);
 					y += 15;
 				}
 			}
@@ -689,6 +784,11 @@ void FavPluginIcon::onAction(EventAction &e) {
 	mbw->AddFavorites(true);
 }
 
+void AddAllIcon::onAction(EventAction &e) {
+	//mbw->AddAllModules();
+	mbw->AddNextModule();
+}
+
 void LoadIcon::onAction(EventAction &e) {
 	mbw->Load();
 }
@@ -703,13 +803,37 @@ void PluginElement::onAction(EventAction &e) {
 	mbw->AddModels(label);
 }
 
+std::string ModelElement::GetLabelOne() {
+	if( mbw->lastModelElementAdded == me )
+	{
+		return std::string("> ").append(model->name);
+	}
+	else
+	{
+		return model->name;
+	}
+}
+
 std::string PluginElement::GetLabelTwo() {
 	unsigned int count = 0;
-	for (std::shared_ptr<ModelElement> me : mbw->modelList) {
-		if (!label.compare(me->model->author))
-			count++;
+	if( isFirst )
+	{
+		for (std::shared_ptr<ModelElement> me : mbw->modelList) {
+			if (!label.compare(me->model->author))
+				count++;
+		}
+
+		return std::to_string(count).append(" of ").append(std::to_string(mbw->modelList.size()))
+			.append(" in ").append(std::to_string(mbw->pluginList.size()));
 	}
-	return std::to_string(count).append(" Modules");
+	else
+	{
+		for (std::shared_ptr<ModelElement> me : mbw->modelList) {
+			if (!label.compare(me->model->author))
+				count++;
+		}
+		return std::to_string(count).append(" Modules");
+	}
 } 
 
 void TagElement::onAction(EventAction &e) {
@@ -735,9 +859,12 @@ void ModelElement::onAction(EventAction &e) {
 	gRackWidget->addModule(moduleWidget);
 	moduleWidget->box.pos = gRackWidget->lastMousePos.minus(moduleWidget->box.size.div(2));
 	gRackWidget->requestModuleBoxNearest(moduleWidget, moduleWidget->box);
+	mbw->lastModelElementAdded = me;
+	mbw->RefreshTextOnControls();
 }
 
 void PluginBackElement::onAction(EventAction &e) {
+	mbw->modelAddedList.clear();
 	if (mbw->pluginIcon->selected) {
 		mbw->AddPlugins();
 	}
